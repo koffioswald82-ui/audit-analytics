@@ -121,7 +121,10 @@ class VendorAnalyzer:
                     ),
                 })
 
-        return pd.DataFrame(pairs).sort_values("similarity", ascending=False)
+        df_pairs = pd.DataFrame(pairs)
+        if df_pairs.empty:
+            return df_pairs
+        return df_pairs.sort_values("similarity", ascending=False)
 
     # ------------------------------------------------------------------
     # Concentration analysis
