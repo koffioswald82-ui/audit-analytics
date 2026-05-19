@@ -43,6 +43,7 @@ from src.anomaly_detector import AnomalyDetector
 from src.journal_entry_analyzer import JournalEntryAnalyzer
 from src.vendor_analyzer import VendorAnalyzer
 from src.risk_reporter import RiskReporter
+from src.ai_reporter import AIReporter, PROVIDERS
 
 # ── Custom CSS — professional dark-gold theme ─────────────────────────────
 st.markdown("""
@@ -239,15 +240,11 @@ def build_sidebar():
         if data_source == "Upload CSV / Excel":
             uploaded_file = st.file_uploader(
                 "Upload General Ledger",
-                type=["csv", "xlsx", "xls"],
-                help="Required columns: posting_date, amount. Optional: entity, account_code, "
-                     "account_type, user_id, vendor_name, posting_hour, debit_credit.",
+                type=["csv", "xlsx", "xls", "xlsm"],
+                help="Accepted: CSV, Excel (.xlsx/.xls/.xlsm). See the column guide below.",
             )
-            st.markdown("**Column mapping** (if headers differ)")
-            col_amount = st.text_input("Amount column", value="amount")
-            col_date   = st.text_input("Date column",   value="posting_date")
-        else:
-            col_amount, col_date = "amount", "posting_date"
+            if uploaded_file:
+                st.caption(f"File: {uploaded_file.name}")
 
         st.divider()
 
@@ -359,6 +356,29 @@ def build_sidebar():
             help="Fuzzy name match score to flag as potential ghost vendor.",
         )
 
+        # ── AI Report Generation ───────────────────────────────────────
+        st.divider()
+        st.markdown("#### AI Report Generation")
+        ai_provider = st.selectbox(
+            "LLM Provider",
+            options=list(PROVIDERS.keys()),
+            format_func=lambda k: PROVIDERS[k]["label"],
+            index=0,
+            help="Groq is the fastest and has a generous free tier.",
+        )
+        ai_model = st.selectbox(
+            "Model",
+            options=PROVIDERS[ai_provider]["models"],
+        )
+        ai_api_key = st.text_input(
+            "API Key",
+            type="password",
+            placeholder=PROVIDERS[ai_provider]["key_hint"],
+            help=f"Get your key: {PROVIDERS[ai_provider]['docs']}",
+        )
+        st.caption(f"[Get {PROVIDERS[ai_provider]['label'].split('(')[0].strip()} API key]"
+                   f"({PROVIDERS[ai_provider]['docs']})")
+
         st.divider()
         st.caption("AuditAI Analytics Platform v2.0")
         st.caption("ISA 240 | ISA 315 | ISA 500")
@@ -369,8 +389,6 @@ def build_sidebar():
         "audit_period":     audit_period,
         "data_source":      data_source,
         "uploaded_file":    uploaded_file,
-        "col_amount":       col_amount,
-        "col_date":         col_date,
         "filter_entity":    filter_entity,
         "filter_acct_type": filter_acct_type,
         "filter_user":      filter_user,
@@ -391,27 +409,213 @@ def build_sidebar():
         "unusual_end":      int(unusual_end),
         "dup_window":       dup_window,
         "fuzzy_threshold":  fuzzy_threshold,
+        "ai_provider":      ai_provider,
+        "ai_model":         ai_model,
+        "ai_api_key":       ai_api_key,
     }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Column mapping constants & helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Standard column → list of known aliases (case-insensitive)
+_COL_ALIASES = {
+    "posting_date":  ["date", "post_date", "trans_date", "transaction_date",
+                      "date_comptable", "buchungsdatum", "datum", "value_date",
+                      "doc_date", "document_date", "gl_date", "period_date"],
+    "amount":        ["montant", "amount_lcy", "amount_local", "betrag", "solde",
+                      "net_amount", "gross_amount", "value", "sum", "debit_amount",
+                      "credit_amount", "transaction_amount", "amt"],
+    "entity":        ["company", "company_code", "bukrs", "societe", "entity_code",
+                      "legal_entity", "business_unit", "company_name"],
+    "account_code":  ["account", "gl_account", "compte", "account_number", "saknr",
+                      "hkont", "gl_code", "ledger_account", "cost_account"],
+    "account_name":  ["account_description", "account_desc", "gl_description",
+                      "compte_libelle", "account_text"],
+    "account_type":  ["acc_type", "type_compte", "account_category", "account_class"],
+    "user_id":       ["user", "posted_by", "preparer", "created_by", "bname",
+                      "entered_by", "entered_user", "posting_user", "utilisateur"],
+    "approved_by":   ["approver", "authorized_by", "manager", "supervisor"],
+    "vendor_name":   ["vendor", "supplier", "fournisseur", "payee", "creditor",
+                      "vendor_description", "supplier_name"],
+    "vendor_id":     ["vendor_code", "supplier_code", "lifnr", "payee_id"],
+    "description":   ["text", "narration", "memo", "sgtxt", "libelle", "note",
+                      "transaction_description", "detail", "reference_text"],
+    "debit_credit":  ["dc_indicator", "d_c", "shkzg", "dr_cr", "type"],
+    "posting_hour":  ["hour", "heure", "time_hour", "entry_hour"],
+    "je_type":       ["entry_type", "journal_type", "source"],
+    "period":        ["fiscal_period", "periode", "accounting_period", "fiscal_month"],
+    "currency":      ["waers", "curr", "currency_code", "doc_currency"],
+    "invoice_ref":   ["invoice", "invoice_number", "ref", "reference", "doc_number"],
+    "cost_center":   ["cost_ctr", "profit_center", "cc", "kostl"],
+}
+
+_REQUIRED_COLS  = ["posting_date", "amount"]
+_RECOMMENDED_COLS = ["entity", "account_code", "account_type", "user_id",
+                     "description", "vendor_name", "posting_hour", "debit_credit"]
+_OPTIONAL_COLS  = ["approved_by", "vendor_id", "je_type", "period",
+                   "currency", "invoice_ref", "cost_center"]
+
+# Schema shown to users
+SCHEMA_TABLE = [
+    # (standard_name, type, status, description, example)
+    ("posting_date",  "Date",    "Required",    "Journal entry posting date",          "2024-03-31"),
+    ("amount",        "Numeric", "Required",    "Transaction amount (positive or neg.)", "125,000.00"),
+    ("entity",        "Text",    "Recommended", "Legal entity / company",              "ACME Corp"),
+    ("account_code",  "Text",    "Recommended", "GL account code",                     "6300"),
+    ("account_name",  "Text",    "Recommended", "Account description",                 "Professional Fees"),
+    ("account_type",  "Text",    "Recommended", "Asset / Liability / Revenue / Expense","Expense"),
+    ("user_id",       "Text",    "Recommended", "User who posted the entry",           "j.martin"),
+    ("description",   "Text",    "Recommended", "Transaction narration / memo",        "Consulting fees Q1"),
+    ("vendor_name",   "Text",    "Recommended", "Vendor / supplier name",             "Apex Consulting"),
+    ("posting_hour",  "Integer", "Recommended", "Hour the entry was posted (0–23)",    "22"),
+    ("debit_credit",  "Text",    "Recommended", "D = Debit / C = Credit",             "D"),
+    ("approved_by",   "Text",    "Optional",    "Approver name or ID",                 "cfo.office"),
+    ("vendor_id",     "Text",    "Optional",    "Vendor / supplier code",             "V001"),
+    ("je_type",       "Text",    "Optional",    "Manual / Automated / Reversal",      "Manual"),
+    ("period",        "Text",    "Optional",    "Fiscal period (YYYY-MM)",            "2024-03"),
+    ("currency",      "Text",    "Optional",    "ISO currency code",                  "USD"),
+    ("invoice_ref",   "Text",    "Optional",    "Invoice or document reference",      "INV-88421"),
+    ("cost_center",   "Text",    "Optional",    "Cost centre / profit centre",        "CC101"),
+]
+
+
+def _auto_map(df_cols: list) -> dict:
+    """Return {standard_col: detected_df_col} using alias matching (case-insensitive)."""
+    cols_lower = {c.lower().strip().replace(" ", "_"): c for c in df_cols}
+    mapping = {}
+    for std_col, aliases in _COL_ALIASES.items():
+        # Exact match first
+        if std_col in cols_lower:
+            mapping[std_col] = cols_lower[std_col]
+            continue
+        # Alias match
+        for alias in aliases:
+            if alias in cols_lower:
+                mapping[std_col] = cols_lower[alias]
+                break
+    return mapping
+
+
+def render_data_guide_and_mapping(uploaded_file) -> dict:
+    """
+    Renders the column structure guide and interactive column mapper.
+    Returns the final column-mapping dict {standard_col: file_col}.
+    """
+    # ── Schema guide ───────────────────────────────────────────────────
+    with st.expander("📋 Expected Column Structure — click to expand", expanded=not bool(uploaded_file)):
+        st.markdown(
+            "Your GL file must include **posting_date** and **amount**. "
+            "The richer the data, the more analysis modules will activate."
+        )
+        schema_df = pd.DataFrame(
+            SCHEMA_TABLE,
+            columns=["Column Name", "Type", "Status", "Description", "Example"],
+        )
+
+        def _style_status(row):
+            color = {"Required": "#FEE2E2", "Recommended": "#FEF3C7",
+                     "Optional": "#F0FDF4"}.get(row["Status"], "")
+            return [f"background-color:{color}"] * len(row)
+
+        st.dataframe(
+            schema_df.style.apply(_style_status, axis=1),
+            use_container_width=True,
+            hide_index=True,
+        )
+        st.download_button(
+            "Download template CSV",
+            data=",".join([r[0] for r in SCHEMA_TABLE]) + "\n",
+            file_name="gl_template.csv",
+            mime="text/csv",
+        )
+
+    if not uploaded_file:
+        return {}
+
+    # ── Load file ──────────────────────────────────────────────────────
+    try:
+        fname = uploaded_file.name.lower()
+        if fname.endswith((".xlsx", ".xls", ".xlsm")):
+            # Let user pick the sheet if multiple
+            xf = pd.ExcelFile(uploaded_file)
+            if len(xf.sheet_names) > 1:
+                sheet = st.selectbox("Select Excel sheet", xf.sheet_names)
+            else:
+                sheet = xf.sheet_names[0]
+            raw_df = pd.read_excel(uploaded_file, sheet_name=sheet)
+        else:
+            enc = st.selectbox("File encoding", ["utf-8", "latin-1", "cp1252"],
+                               help="Try latin-1 or cp1252 if you see garbled characters.")
+            sep = st.selectbox("Delimiter", [",", ";", "\t", "|"])
+            raw_df = pd.read_csv(uploaded_file, encoding=enc, sep=sep, low_memory=False)
+    except Exception as e:
+        st.error(f"Could not read file: {e}")
+        return {}
+
+    st.success(f"File loaded: **{len(raw_df):,} rows × {len(raw_df.columns)} columns**")
+    st.dataframe(raw_df.head(5), use_container_width=True)
+
+    # ── Auto-detect mapping ────────────────────────────────────────────
+    auto = _auto_map(list(raw_df.columns))
+    file_col_options = ["— not available —"] + list(raw_df.columns)
+
+    st.markdown("#### Column Mapping")
+    st.caption(
+        "Auto-detected from your column headers. "
+        "Adjust any mismatches — required fields are marked."
+    )
+
+    final_mapping = {}
+    all_std = _REQUIRED_COLS + _RECOMMENDED_COLS + _OPTIONAL_COLS
+    cols_per_row = 3
+    rows = [all_std[i:i+cols_per_row] for i in range(0, len(all_std), cols_per_row)]
+
+    for row_cols in rows:
+        ui_cols = st.columns(len(row_cols))
+        for ui_col, std_col in zip(ui_cols, row_cols):
+            detected = auto.get(std_col, "— not available —")
+            status   = "🔴" if std_col in _REQUIRED_COLS else (
+                       "🟡" if std_col in _RECOMMENDED_COLS else "⚪")
+            default_idx = (
+                file_col_options.index(detected) if detected in file_col_options else 0
+            )
+            chosen = ui_col.selectbox(
+                f"{status} {std_col}",
+                options=file_col_options,
+                index=default_idx,
+                key=f"colmap_{std_col}",
+            )
+            if chosen != "— not available —":
+                final_mapping[std_col] = chosen
+
+    # Validate required columns
+    missing_required = [c for c in _REQUIRED_COLS if c not in final_mapping]
+    if missing_required:
+        st.error(f"Required columns not mapped: **{', '.join(missing_required)}**. "
+                 "Please map them above before proceeding.")
+        return {}
+
+    # Store raw_df in session state for load_data to access
+    st.session_state["_uploaded_raw_df"]  = raw_df
+    st.session_state["_col_mapping"]       = final_mapping
+    st.success(f"Mapping confirmed — {len(final_mapping)} columns mapped.")
+    return final_mapping
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Data loading & filtering
 # ─────────────────────────────────────────────────────────────────────────────
 def load_data(cfg: dict) -> pd.DataFrame:
-    if cfg["data_source"] == "Upload CSV / Excel" and cfg["uploaded_file"]:
-        f = cfg["uploaded_file"]
-        if f.name.endswith((".xlsx", ".xls")):
-            df = pd.read_excel(f)
-        else:
-            df = pd.read_csv(f, low_memory=False)
-        # Remap columns if needed
-        rename_map = {}
-        if cfg["col_amount"] != "amount" and cfg["col_amount"] in df.columns:
-            rename_map[cfg["col_amount"]] = "amount"
-        if cfg["col_date"] != "posting_date" and cfg["col_date"] in df.columns:
-            rename_map[cfg["col_date"]] = "posting_date"
-        if rename_map:
-            df = df.rename(columns=rename_map)
+    if cfg["data_source"] == "Upload CSV / Excel":
+        raw_df  = st.session_state.get("_uploaded_raw_df")
+        mapping = st.session_state.get("_col_mapping", {})
+        if raw_df is None or not mapping:
+            return None
+        # Apply column mapping
+        rename = {v: k for k, v in mapping.items() if v != k}
+        df = raw_df.rename(columns=rename)
         return _parse_df(df)
     return load_sample_data()
 
@@ -1013,6 +1217,123 @@ def tab_vendors(df: pd.DataFrame, cfg: dict):
 # ─────────────────────────────────────────────────────────────────────────────
 # Tab: Audit Report
 # ─────────────────────────────────────────────────────────────────────────────
+def _build_findings(df, scored_df, benford_result, ml_scored, cfg):
+    """Compile all analysis results into a single dict for reporting."""
+    total       = len(df)
+    flagged     = int((scored_df["risk_score"] >= 40).sum()) if scored_df is not None else 0
+    critical_je = int((scored_df["risk_score"] >= 70).sum()) if scored_df is not None else 0
+    flagged_pct = flagged / total * 100 if total else 0
+
+    je_stats = {
+        "total_entries":  total,
+        "flagged_entries": flagged,
+        "critical_je":    critical_je,
+        "top_indicators": {},
+    }
+    if scored_df is not None:
+        flag_cols = [c for c in scored_df.columns if c.startswith("flag_")]
+        top5 = sorted(flag_cols, key=lambda c: scored_df[c].sum(), reverse=True)[:5]
+        for c in top5:
+            label = c.replace("flag_", "").replace("_", " ").title()
+            je_stats["top_indicators"][label] = f"{int(scored_df[c].sum()):,} entries"
+
+    ml_stats = {
+        "anomaly_count": int(ml_scored["is_anomaly"].sum()) if ml_scored is not None else 0,
+        "consensus":     0,
+        "top_drivers":   "N/A",
+    }
+    if ml_scored is not None and scored_df is not None:
+        ml_stats["consensus"] = int(
+            (ml_scored["is_anomaly"] & (scored_df["risk_score"] >= 40)).sum()
+        )
+    if ml_scored is not None and "top_risk_driver" in ml_scored.columns:
+        top_drv = (
+            ml_scored[ml_scored["is_anomaly"]]["top_risk_driver"]
+            .value_counts().head(3).index.tolist()
+        )
+        ml_stats["top_drivers"] = ", ".join(top_drv) or "N/A"
+
+    analyzer = VendorAnalyzer(duplicate_window_days=cfg["dup_window"])
+    dups   = analyzer.detect_duplicates(df)
+    ghosts = analyzer.detect_ghost_vendors(df)
+    conc   = analyzer.concentration_analysis(df)
+    vendor_stats = {
+        "duplicate_count":   len(dups),
+        "ghost_vendor_pairs": len(ghosts),
+        "top_vendor":        conc.iloc[0]["vendor_name"] if not conc.empty else "N/A",
+        "top_vendor_pct":    float(conc.iloc[0]["pct_of_total"]) if not conc.empty else 0.0,
+    }
+
+    b_risk    = benford_result.isa_240_risk_level if benford_result else "N/A"
+    b_comment = benford_result.isa_240_comment    if benford_result else ""
+
+    # Auto-ranked findings
+    top_findings = []
+    if b_risk == "HIGH":
+        top_findings.append({
+            "risk_level": "High",
+            "title":       "Benford's Law Non-Conformity",
+            "description": "Statistically significant deviation from Benford's Law — possible fabricated or manipulated amounts.",
+            "isa_ref":     "ISA 240.A4, ISA 500.A14",
+            "action":      "Expand substantive testing on red-flag digit populations.",
+        })
+    if flagged_pct > 5:
+        top_findings.append({
+            "risk_level": "High",
+            "title":       f"Elevated JE Risk Indicators ({flagged_pct:.1f}% flagged)",
+            "description": f"{flagged:,} entries exceeded risk threshold — round numbers, period-end, off-hours.",
+            "isa_ref":     "ISA 240.A3",
+            "action":      "Targeted testing on High/Critical entries; focus on period-end.",
+        })
+    if len(dups) > 0:
+        top_findings.append({
+            "risk_level": "High",
+            "title":       f"Potential Duplicate Payments ({len(dups):,} entries)",
+            "description": f"Same vendor + amount within {cfg['dup_window']} days.",
+            "isa_ref":     "ISA 240.A3, COSO Fraud Framework",
+            "action":      "Inspect underlying invoices and payment confirmations.",
+        })
+    if len(ghosts) > 0:
+        top_findings.append({
+            "risk_level": "Medium",
+            "title":       f"Ghost Vendor Risk ({len(ghosts)} pairs)",
+            "description": "High-similarity vendor names detected — potential ghost vendor scheme.",
+            "isa_ref":     "ISA 240.A3",
+            "action":      "Verify vendor master data, bank details, approval chain.",
+        })
+    if ml_stats["anomaly_count"] > 0:
+        top_findings.append({
+            "risk_level": "Medium",
+            "title":       f"ML Anomalies ({ml_stats['anomaly_count']:,} entries)",
+            "description": f"Isolation Forest outliers; {ml_stats['consensus']:,} consensus with statistical flags.",
+            "isa_ref":     "ISA 240.A26, PCAOB AS 2401.66",
+            "action":      "Review top-scoring anomalies, prioritise consensus entries.",
+        })
+    if not top_findings:
+        top_findings.append({
+            "risk_level": "Low",
+            "title":       "No significant findings",
+            "description": "Data analytics procedures did not identify material risk indicators.",
+            "isa_ref":     "ISA 500.A1",
+            "action":      "Continue with standard audit procedures.",
+        })
+
+    return {
+        "cfg":          cfg,
+        "digit_type":   cfg.get("digit_type", "first"),
+        "benford":      benford_result,
+        "je_stats":     je_stats,
+        "ml_stats":     ml_stats,
+        "vendor_stats": vendor_stats,
+        "top_findings": top_findings,
+        "_dups":        dups,
+        "_ghosts":      ghosts,
+        "_flagged_pct": flagged_pct,
+        "_b_risk":      b_risk,
+        "_b_comment":   b_comment,
+    }
+
+
 def tab_report(
     df: pd.DataFrame,
     scored_df: pd.DataFrame,
@@ -1023,6 +1344,13 @@ def tab_report(
     st.markdown('<div class="section-header">Audit Risk Memorandum</div>',
                 unsafe_allow_html=True)
 
+    findings = _build_findings(df, scored_df, benford_result, ml_scored, cfg)
+    dups      = findings["_dups"]
+    ghosts    = findings["_ghosts"]
+    b_risk    = findings["_b_risk"]
+    b_comment = findings["_b_comment"]
+    top_findings = findings["top_findings"]
+
     reporter = RiskReporter(
         client_name=cfg["client_name"],
         engagement_partner=cfg["partner"],
@@ -1031,116 +1359,66 @@ def tab_report(
         prepared_by="Data Analytics Team",
     )
 
-    # Gather stats
-    total = len(df)
-    flagged = int((scored_df["risk_score"] >= 40).sum()) if scored_df is not None else 0
-    je_stats = {
-        "total_entries": total,
-        "flagged_entries": flagged,
-        "top_indicators": {},
-    }
-    if scored_df is not None:
-        flag_cols = [c for c in scored_df.columns if c.startswith("flag_")]
-        top = sorted(flag_cols, key=lambda c: scored_df[c].sum(), reverse=True)[:5]
-        for c in top:
-            label = c.replace("flag_", "").replace("_", " ").title()
-            je_stats["top_indicators"][label] = f"{int(scored_df[c].sum()):,} entries"
-
-    ml_stats = {
-        "anomaly_count": int(ml_scored["is_anomaly"].sum()) if ml_scored is not None else 0,
-        "consensus": 0,
-    }
-    if ml_scored is not None and scored_df is not None:
-        consensus = (ml_scored["is_anomaly"] & (scored_df["risk_score"] >= 40)).sum()
-        ml_stats["consensus"] = int(consensus)
-
-    analyzer = VendorAnalyzer(duplicate_window_days=cfg["dup_window"])
-    dups = analyzer.detect_duplicates(df)
-    ghosts = analyzer.detect_ghost_vendors(df)
-    vendor_stats = {
-        "duplicate_count": len(dups),
-        "ghost_vendor_pairs": len(ghosts),
-    }
-
-    b_risk = benford_result.isa_240_risk_level if benford_result else "N/A"
-    b_comment = benford_result.isa_240_comment if benford_result else ""
-
-    # Auto-generate top findings
-    top_findings = []
-    flagged_pct = flagged / total * 100 if total else 0
-    if b_risk == "HIGH":
-        top_findings.append({
-            "risk_level": "High",
-            "title": "Benford's Law Non-Conformity",
-            "description": (
-                "The general ledger data shows statistically significant deviation "
-                "from Benford's Law distribution, indicating possible fabricated "
-                "or manipulated entries."
-            ),
-            "isa_ref": "ISA 240.A4, ISA 500.A14",
-            "action": "Expand substantive testing on red-flag digit populations.",
-        })
-    if flagged_pct > 5:
-        top_findings.append({
-            "risk_level": "High",
-            "title": f"Elevated JE Risk Indicators ({flagged_pct:.1f}% flagged)",
-            "description": (
-                f"{flagged:,} journal entries ({flagged_pct:.1f}%) exceeded the risk "
-                "threshold. Key indicators: round numbers, period-end entries, off-hours postings."
-            ),
-            "isa_ref": "ISA 240.A3",
-            "action": "Perform targeted testing on high-risk entries, especially period-end.",
-        })
-    if len(dups) > 0:
-        top_findings.append({
-            "risk_level": "High",
-            "title": f"Potential Duplicate Payments ({len(dups):,} entries)",
-            "description": (
-                f"{len(dups):,} entries appear to represent duplicate payments "
-                f"to the same vendor for the same amount within {cfg['dup_window']} days."
-            ),
-            "isa_ref": "ISA 240.A3, COSO Fraud Framework",
-            "action": "Obtain and inspect underlying invoices and payment confirmations.",
-        })
-    if len(ghosts) > 0:
-        top_findings.append({
-            "risk_level": "Medium",
-            "title": f"Ghost Vendor Risk ({len(ghosts)} similar name pairs)",
-            "description": (
-                "Fuzzy name matching identified vendor pairs with high similarity. "
-                "Verify vendor master data for completeness and legitimacy."
-            ),
-            "isa_ref": "ISA 240.A3",
-            "action": "Confirm vendor registration, bank details, and approval chain.",
-        })
-    if ml_stats["anomaly_count"] > 0:
-        top_findings.append({
-            "risk_level": "Medium",
-            "title": f"ML Anomalies Detected ({ml_stats['anomaly_count']:,} entries)",
-            "description": (
-                f"Isolation Forest flagged {ml_stats['anomaly_count']:,} multivariate outliers. "
-                f"{ml_stats['consensus']:,} overlap with statistical risk indicators."
-            ),
-            "isa_ref": "ISA 240.A26",
-            "action": "Review top-scoring anomalies, focusing on consensus entries.",
-        })
-
-    if not top_findings:
-        top_findings.append({
-            "risk_level": "Low",
-            "title": "No significant findings",
-            "description": "Data analytics procedures did not identify material risk indicators.",
-            "isa_ref": "ISA 500.A1",
-            "action": "Continue with standard audit procedures.",
-        })
-
+    # ── Static memo (always available) ────────────────────────────────
     memo_text = reporter.generate_text_memo(
-        b_risk, b_comment, je_stats, ml_stats, vendor_stats, top_findings
+        b_risk, b_comment,
+        findings["je_stats"], findings["ml_stats"], findings["vendor_stats"],
+        top_findings,
     )
 
-    st.text_area("Audit Memorandum (DA-001)", memo_text, height=600)
+    # ── AI generation section ──────────────────────────────────────────
+    st.markdown('<div class="section-header">AI-Powered Memo Generation</div>',
+                unsafe_allow_html=True)
 
-    # Findings display
+    ai_col1, ai_col2 = st.columns([3, 1])
+    with ai_col1:
+        provider_label = PROVIDERS.get(cfg["ai_provider"], {}).get("label", cfg["ai_provider"])
+        st.markdown(
+            f'<div class="finding-box">🤖 <strong>Provider:</strong> {provider_label} &nbsp;|&nbsp; '
+            f'<strong>Model:</strong> {cfg["ai_model"]}<br/>'
+            f'Generate a professional ISA-referenced audit memorandum using AI. '
+            f'The model receives all analysis results and produces a Big 4 quality memo.</div>',
+            unsafe_allow_html=True,
+        )
+    with ai_col2:
+        generate_ai = st.button("Generate AI Memo", type="primary", use_container_width=True)
+
+    ai_memo_key = "ai_memo_text"
+
+    if generate_ai:
+        if not cfg.get("ai_api_key", "").strip():
+            st.error("Please enter your API key in the sidebar before generating.")
+        else:
+            with st.spinner(f"Generating memo with {cfg['ai_model']}..."):
+                try:
+                    ai_reporter = AIReporter()
+                    ai_text = ai_reporter.generate(
+                        findings=findings,
+                        provider=cfg["ai_provider"],
+                        model=cfg["ai_model"],
+                        api_key=cfg["ai_api_key"],
+                    )
+                    st.session_state[ai_memo_key] = ai_text
+                    st.success("AI memo generated successfully.")
+                except Exception as e:
+                    st.error(f"Generation failed: {e}")
+
+    if ai_memo_key in st.session_state and st.session_state[ai_memo_key]:
+        st.markdown("##### AI-Generated Audit Memorandum")
+        st.markdown(st.session_state[ai_memo_key])
+        st.download_button(
+            "Download AI Memo (Markdown)",
+            data=st.session_state[ai_memo_key],
+            file_name=f"AI_AuditMemo_{cfg['audit_period'].replace(' ','_')}.md",
+            mime="text/markdown",
+        )
+        st.divider()
+
+    # ── Static memo fallback ───────────────────────────────────────────
+    st.markdown("##### Standard Audit Memorandum (DA-001)")
+    st.text_area("", memo_text, height=500, label_visibility="collapsed")
+
+    # ── Ranked findings display ────────────────────────────────────────
     st.markdown('<div class="section-header">Ranked Findings</div>', unsafe_allow_html=True)
     for i, f in enumerate(top_findings, 1):
         badge_map = {"High": "badge-high", "Critical": "badge-critical",
@@ -1219,17 +1497,26 @@ def main():
         unsafe_allow_html=True,
     )
 
+    # ── Upload guide + column mapping (only when upload mode) ──────────
+    if cfg["data_source"] == "Upload CSV / Excel":
+        render_data_guide_and_mapping(cfg["uploaded_file"])
+        # Gate: don't proceed until mapping is confirmed
+        if not st.session_state.get("_col_mapping"):
+            st.info("Upload your GL file and confirm the column mapping above to start the analysis.")
+            return
+
     # Load data
     with st.spinner("Loading data…"):
         raw_df = load_data(cfg)
 
     if raw_df is None or raw_df.empty:
-        st.warning("No data loaded. Please upload a file or use the sample dataset.")
+        if cfg["data_source"] == "Upload CSV / Excel":
+            st.warning("File not yet loaded or column mapping incomplete.")
+        else:
+            st.warning("No data loaded. Please use the sample dataset or upload a file.")
         return
 
-    # Populate sidebar filter options retroactively
-    # (Streamlit re-runs mean filters appear empty on first run;
-    #  we use expander to show available values)
+    # Show available filter values in sidebar expander
     with st.sidebar.expander("Available filter values"):
         if "entity" in raw_df.columns:
             st.write("**Entities:**", ", ".join(sorted(raw_df["entity"].dropna().unique())))
@@ -1242,13 +1529,13 @@ def main():
     df = apply_filters(raw_df, cfg)
 
     if df.empty:
-        st.error("No entries match the current filter criteria. Please adjust the filters.")
+        st.error("No entries match the current filters. Please adjust the criteria.")
         return
 
     st.info(
-        f"**Dataset:** {len(df):,} entries loaded "
+        f"**Dataset:** {len(df):,} entries "
         f"({'sample data' if cfg['data_source'].startswith('Sample') else 'uploaded file'}) "
-        f"| Filtered from {len(raw_df):,} total entries."
+        f"| Filtered from {len(raw_df):,} total."
     )
 
     # Run analyses (cached)
