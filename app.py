@@ -7,7 +7,6 @@ Covers: Benford's Law, Journal Entry Risk Scoring, ML Anomaly Detection,
 
 Standards: ISA 240 | ISA 315 | ISA 500 | PCAOB AS 2401
 """
-import io
 import sys
 import warnings
 import importlib.util
@@ -25,12 +24,12 @@ warnings.filterwarnings("ignore")
 # ── Page config (must be first Streamlit call) ─────────────────────────────
 st.set_page_config(
     page_title="AuditAI Analytics",
-    page_icon="🔍",
+    page_icon=None,
     layout="wide",
     initial_sidebar_state="expanded",
     menu_items={
         "Get Help": "mailto:audit-analytics@firm.com",
-        "About": "AuditAI Analytics Platform v2.0 — Big 4 Audit Intelligence",
+        "About": "AuditAI Analytics Platform v2.0",
     },
 )
 
@@ -44,8 +43,9 @@ from src.journal_entry_analyzer import JournalEntryAnalyzer
 from src.vendor_analyzer import VendorAnalyzer
 from src.risk_reporter import RiskReporter
 from src.ai_reporter import AIReporter, PROVIDERS
+from src.audit_chatbot import call_chatbot, STARTER_QUESTIONS
 
-# ── Custom CSS — professional dark-gold theme ─────────────────────────────
+# Custom CSS: professional dark-gold theme
 st.markdown("""
 <style>
 /* ── Global ── */
@@ -139,7 +139,7 @@ html, body, [class*="css"] { font-family: 'Segoe UI', Arial, sans-serif; }
 # ─────────────────────────────────────────────────────────────────────────────
 # Helpers
 # ─────────────────────────────────────────────────────────────────────────────
-@st.cache_data(show_spinner="Generating sample GL dataset (10,000 entries)…")
+@st.cache_data(show_spinner="Generating sample GL dataset (10,000 entries)...")
 def load_sample_data() -> pd.DataFrame:
     sample_path = ROOT / "data" / "sample_general_ledger.csv"
     if not sample_path.exists():
@@ -166,7 +166,7 @@ def _parse_df(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-@st.cache_data(show_spinner="Running Benford analysis…")
+@st.cache_data(show_spinner="Running Benford analysis...")
 def run_benford(_df, digit_type, min_amount, alpha):
     analyzer = BenfordAnalyzer()
     return analyzer.analyze(
@@ -177,7 +177,7 @@ def run_benford(_df, digit_type, min_amount, alpha):
     )
 
 
-@st.cache_data(show_spinner="Scoring journal entries…")
+@st.cache_data(show_spinner="Scoring journal entries...")
 def run_je_scoring(_df, materiality, period_end_days, unusual_start, unusual_end):
     analyzer = JournalEntryAnalyzer(
         materiality=materiality,
@@ -188,7 +188,7 @@ def run_je_scoring(_df, materiality, period_end_days, unusual_start, unusual_end
     return analyzer.score_entries(_df)
 
 
-@st.cache_data(show_spinner="Training ML anomaly detector…")
+@st.cache_data(show_spinner="Training ML anomaly detector...")
 def run_ml_detection(_df, contamination, n_estimators):
     detector = AnomalyDetector(
         contamination=contamination,
@@ -216,13 +216,13 @@ def _fmt_amount(v: float) -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 def build_sidebar():
     with st.sidebar:
-        st.markdown("### 🔍 AuditAI Analytics")
-        st.markdown("*Data Analytics for External Audit*")
+        st.markdown("### AuditAI Analytics")
+        st.markdown("*Audit Data Analytics Platform*")
         st.divider()
 
         # ── Engagement parameters ──────────────────────────────────────
         st.markdown("#### Engagement")
-        client_name = st.text_input("Client name", value="Demo Client — EY")
+        client_name = st.text_input("Client name", value="Demo Client")
         partner     = st.text_input("Engagement partner", value="Partner A")
         audit_period = st.text_input("Audit period", value="FY 2024")
 
@@ -251,7 +251,7 @@ def build_sidebar():
         # ── Filters ────────────────────────────────────────────────────
         st.markdown("#### Filters")
 
-        # These are populated after data load — use placeholders
+        # These are populated after data load (use placeholders)
         filter_entity    = st.multiselect("Entity / company", options=[], placeholder="All entities")
         filter_acct_type = st.multiselect("Account type",     options=[], placeholder="All types")
         filter_user      = st.multiselect("Posted by (user)", options=[], placeholder="All users")
@@ -318,7 +318,7 @@ def build_sidebar():
         contamination = st.slider(
             "Expected anomaly rate (%)",
             min_value=1, max_value=15, value=5,
-            help="Isolation Forest contamination parameter — estimated % of anomalies.",
+            help="Isolation Forest contamination parameter: estimated % of anomalies.",
         ) / 100.0
         n_estimators = st.slider(
             "Number of trees (IF)",
@@ -393,8 +393,8 @@ def build_sidebar():
             )
 
         st.divider()
-        st.caption("AuditAI Analytics Platform v2.0")
-        st.caption("ISA 240 | ISA 315 | ISA 500")
+        st.caption("AuditAI Analytics v2.0")
+        st.caption("ISA 240  |  ISA 315  |  ISA 500")
 
     return {
         "client_name":      client_name,
@@ -517,7 +517,7 @@ def render_data_guide_and_mapping(uploaded_file) -> dict:
     Returns the final column-mapping dict {standard_col: file_col}.
     """
     # ── Schema guide ───────────────────────────────────────────────────
-    with st.expander("📋 Expected Column Structure — click to expand", expanded=not bool(uploaded_file)):
+    with st.expander("Expected Column Structure (click to expand)", expanded=not bool(uploaded_file)):
         st.markdown(
             "Your GL file must include **posting_date** and **amount**. "
             "The richer the data, the more analysis modules will activate."
@@ -572,12 +572,12 @@ def render_data_guide_and_mapping(uploaded_file) -> dict:
 
     # ── Auto-detect mapping ────────────────────────────────────────────
     auto = _auto_map(list(raw_df.columns))
-    file_col_options = ["— not available —"] + list(raw_df.columns)
+    file_col_options = ["[ not mapped ]"] + list(raw_df.columns)
 
     st.markdown("#### Column Mapping")
     st.caption(
         "Auto-detected from your column headers. "
-        "Adjust any mismatches — required fields are marked."
+        "Adjust any mismatches. Required fields are marked."
     )
 
     final_mapping = {}
@@ -588,9 +588,9 @@ def render_data_guide_and_mapping(uploaded_file) -> dict:
     for row_cols in rows:
         ui_cols = st.columns(len(row_cols))
         for ui_col, std_col in zip(ui_cols, row_cols):
-            detected = auto.get(std_col, "— not available —")
-            status   = "🔴" if std_col in _REQUIRED_COLS else (
-                       "🟡" if std_col in _RECOMMENDED_COLS else "⚪")
+            detected = auto.get(std_col, "[ not mapped ]")
+            status   = "[R]" if std_col in _REQUIRED_COLS else (
+                       "[+]" if std_col in _RECOMMENDED_COLS else "[ ]")
             default_idx = (
                 file_col_options.index(detected) if detected in file_col_options else 0
             )
@@ -600,7 +600,7 @@ def render_data_guide_and_mapping(uploaded_file) -> dict:
                 index=default_idx,
                 key=f"colmap_{std_col}",
             )
-            if chosen != "— not available —":
+            if chosen != "[ not mapped ]":
                 final_mapping[std_col] = chosen
 
     # Validate required columns
@@ -613,7 +613,7 @@ def render_data_guide_and_mapping(uploaded_file) -> dict:
     # Store raw_df in session state for load_data to access
     st.session_state["_uploaded_raw_df"]  = raw_df
     st.session_state["_col_mapping"]       = final_mapping
-    st.success(f"Mapping confirmed — {len(final_mapping)} columns mapped.")
+    st.success(f"Mapping confirmed: {len(final_mapping)} columns mapped.")
     return final_mapping
 
 
@@ -688,7 +688,7 @@ def tab_executive(df: pd.DataFrame, scored_df: pd.DataFrame,
     )
 
     # Compute overall risk
-    b_risk = benford_result.isa_240_risk_level if benford_result else "—"
+    b_risk = benford_result.isa_240_risk_level if benford_result else "N/A"
     if b_risk == "HIGH" or flagged_pct > 10:
         overall = "HIGH"
         badge = "badge-high"
@@ -716,7 +716,7 @@ def tab_executive(df: pd.DataFrame, scored_df: pd.DataFrame,
         st.metric("Flagged Amount",      f"${flagged_amt:,.0f}")
     with col3:
         st.metric("ML Anomalies",        f"{ml_anom:,}",
-                  delta=f"{ml_anom/total*100:.1f}% rate" if total else "—")
+                  delta=f"{ml_anom/total*100:.1f}% rate" if total else "")
         if benford_result:
             st.metric("Benford MAD",     f"{benford_result.mad:.5f}",
                       delta=benford_result.mad_conformity)
@@ -787,7 +787,7 @@ def tab_benford(df: pd.DataFrame, benford_result, cfg: dict):
                 unsafe_allow_html=True)
 
     if benford_result is None:
-        st.warning("Benford analysis could not be computed — insufficient data.")
+        st.warning("Benford analysis could not be computed: insufficient data.")
         return
 
     r = benford_result
@@ -806,14 +806,12 @@ def tab_benford(df: pd.DataFrame, benford_result, cfg: dict):
         st.metric("Conformity", r.mad_conformity)
     with col4:
         st.metric("KS statistic", f"{r.ks_statistic:.4f}")
-        badge = {"HIGH": "🔴 HIGH", "MEDIUM": "🟡 MEDIUM", "LOW": "🟢 LOW"}.get(
-            r.isa_240_risk_level, r.isa_240_risk_level
-        )
+        badge = r.isa_240_risk_level
         st.metric("ISA 240 Risk", badge)
 
     # ISA commentary
     st.markdown(
-        f'<div class="finding-box">📋 <strong>ISA 240 Commentary:</strong> {r.isa_240_comment}</div>',
+        f'<div class="finding-box"><strong>ISA 240 Commentary:</strong> {r.isa_240_comment}</div>',
         unsafe_allow_html=True,
     )
 
@@ -852,8 +850,8 @@ def tab_benford(df: pd.DataFrame, benford_result, cfg: dict):
     # Red flags
     if r.red_flag_digits:
         st.markdown(
-            f'<div class="finding-box">⚠️ <strong>Red Flag Digits:</strong> '
-            f'{", ".join(str(d) for d in r.red_flag_digits)} — '
+            f'<div class="finding-box"><strong>Red Flag Digits:</strong> '
+            f'{", ".join(str(d) for d in r.red_flag_digits)}. '
             f'Z-score > 1.96. Investigate entries with these leading digits.</div>',
             unsafe_allow_html=True,
         )
@@ -885,7 +883,7 @@ def tab_benford(df: pd.DataFrame, benford_result, cfg: dict):
         "Observed %":  [f"{r.observed.get(d,0)*100:.3f}%" for d in digits],
         "Deviation":   [f"{(r.observed.get(d,0)-r.expected[d])*100:+.3f}%" for d in digits],
         "Z-Score":     [f"{r.z_scores.get(d,0):.3f}" for d in digits],
-        "Flag":        ["🔴 RED FLAG" if d in r.red_flag_digits else "✅" for d in digits],
+        "Flag":        ["RED FLAG" if d in r.red_flag_digits else "" for d in digits],
     })
     st.dataframe(detail, use_container_width=True, hide_index=True)
 
@@ -1041,7 +1039,7 @@ def tab_ml(ml_scored: pd.DataFrame, scored_df: pd.DataFrame, cfg: dict):
             st.metric("ML only", f"{overlap['ml_only']:,}")
 
     st.markdown(
-        '<div class="finding-box">🤖 <strong>Isolation Forest</strong> detects multivariate outliers '
+        '<div class="finding-box"><strong>Isolation Forest</strong> detects multivariate outliers '
         'using features: log-amount, posting time, day-of-week, account type, user profile. '
         'SHAP values identify the primary driver for each anomaly (ISA 240.A26).</div>',
         unsafe_allow_html=True,
@@ -1078,7 +1076,7 @@ def tab_ml(ml_scored: pd.DataFrame, scored_df: pd.DataFrame, cfg: dict):
             c: True for c in ["je_id", "entity", "user_id", "description"]
             if c in ml_scored.columns
         },
-        title="Anomalous Entries — Amount vs Score",
+        title="Anomalous Entries: Amount vs Score",
         labels={"amount": "Amount ($)", "anomaly_score": "Anomaly Score"},
         log_x=True,
     )
@@ -1142,10 +1140,10 @@ def tab_vendors(df: pd.DataFrame, cfg: dict):
 
     # ── Duplicates ─────────────────────────────────────────────────────
     st.markdown("##### Duplicate Payment Detection")
-    with st.spinner("Detecting duplicate payments…"):
+    with st.spinner("Detecting duplicate payments..."):
         dups = analyzer.detect_duplicates(df)
     if not dups.empty:
-        st.error(f"⚠️ {len(dups):,} potential duplicate payments detected "
+        st.error(f"{len(dups):,} potential duplicate payments detected "
                  f"(total: ${dups['amount'].abs().sum():,.0f})")
         st.dataframe(
             dups[[c for c in ["je_id", "entity", "posting_date", "vendor_name",
@@ -1159,10 +1157,10 @@ def tab_vendors(df: pd.DataFrame, cfg: dict):
 
     # ── Ghost vendors ──────────────────────────────────────────────────
     st.markdown("##### Ghost Vendor Detection (Fuzzy Name Matching)")
-    with st.spinner("Running fuzzy name matching…"):
+    with st.spinner("Running fuzzy name matching..."):
         ghosts = analyzer.detect_ghost_vendors(df)
     if not ghosts.empty:
-        st.warning(f"🔍 {len(ghosts)} suspicious vendor name pairs found (similarity ≥ {cfg['fuzzy_threshold']}%)")
+        st.warning(f"{len(ghosts)} suspicious vendor name pairs found (similarity >= {cfg['fuzzy_threshold']}%)")
         st.dataframe(ghosts, use_container_width=True, hide_index=True)
     else:
         st.success("No ghost vendors detected at current similarity threshold.")
@@ -1180,7 +1178,7 @@ def tab_vendors(df: pd.DataFrame, cfg: dict):
                 text="pct_of_total",
                 color="pct_of_total",
                 color_continuous_scale=["#059669", "#D97706", "#DC2626"],
-                title="Top 10 Vendors — % of Total Spend",
+                title="Top 10 Vendors: % of Total Spend",
                 labels={"pct_of_total": "% of Total Spend", "vendor_name": "Vendor"},
             )
             fig.update_traces(texttemplate="%{text:.1f}%", textposition="outside")
@@ -1286,7 +1284,7 @@ def _build_findings(df, scored_df, benford_result, ml_scored, cfg):
         top_findings.append({
             "risk_level": "High",
             "title":       "Benford's Law Non-Conformity",
-            "description": "Statistically significant deviation from Benford's Law — possible fabricated or manipulated amounts.",
+            "description": "Statistically significant deviation from Benford's Law. Possible fabricated or manipulated amounts.",
             "isa_ref":     "ISA 240.A4, ISA 500.A14",
             "action":      "Expand substantive testing on red-flag digit populations.",
         })
@@ -1294,7 +1292,7 @@ def _build_findings(df, scored_df, benford_result, ml_scored, cfg):
         top_findings.append({
             "risk_level": "High",
             "title":       f"Elevated JE Risk Indicators ({flagged_pct:.1f}% flagged)",
-            "description": f"{flagged:,} entries exceeded risk threshold — round numbers, period-end, off-hours.",
+            "description": f"{flagged:,} entries exceeded risk threshold: round numbers, period-end, off-hours.",
             "isa_ref":     "ISA 240.A3",
             "action":      "Targeted testing on High/Critical entries; focus on period-end.",
         })
@@ -1310,7 +1308,7 @@ def _build_findings(df, scored_df, benford_result, ml_scored, cfg):
         top_findings.append({
             "risk_level": "Medium",
             "title":       f"Ghost Vendor Risk ({len(ghosts)} pairs)",
-            "description": "High-similarity vendor names detected — potential ghost vendor scheme.",
+            "description": "High-similarity vendor names detected. Potential ghost vendor scheme.",
             "isa_ref":     "ISA 240.A3",
             "action":      "Verify vendor master data, bank details, approval chain.",
         })
@@ -1387,7 +1385,7 @@ def tab_report(
     with ai_col1:
         provider_label = PROVIDERS.get(cfg["ai_provider"], {}).get("label", cfg["ai_provider"])
         st.markdown(
-            f'<div class="finding-box">🤖 <strong>Provider:</strong> {provider_label} &nbsp;|&nbsp; '
+            f'<div class="finding-box"><strong>Provider:</strong> {provider_label} &nbsp;|&nbsp; '
             f'<strong>Model:</strong> {cfg["ai_model"]}<br/>'
             f'Generate a professional ISA-referenced audit memorandum using AI. '
             f'The model receives all analysis results and produces a Big 4 quality memo.</div>',
@@ -1440,7 +1438,7 @@ def tab_report(
         st.markdown(
             f'<div class="finding-box">'
             f'<strong>[{i}] <span class="{badge}">&nbsp;{f["risk_level"].upper()}&nbsp;</span>'
-            f' — {f["title"]}</strong><br/>'
+            f': {f["title"]}</strong><br/>'
             f'{f["description"]}<br/>'
             f'<em>ISA Ref:</em> {f["isa_ref"]} &nbsp;|&nbsp; '
             f'<em>Action:</em> {f["action"]}'
@@ -1463,7 +1461,7 @@ def tab_report(
                 ghost_vendors=ghosts if not ghosts.empty else None,
             )
             st.download_button(
-                label="📥 Download Excel Workbook",
+                label="Download Excel Workbook",
                 data=excel_bytes,
                 file_name=f"AuditAI_{cfg['client_name'].replace(' ','_')}_Exceptions.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -1474,7 +1472,7 @@ def tab_report(
     with col2:
         # Text memo download
         st.download_button(
-            label="📄 Download Audit Memo (TXT)",
+            label="Download Audit Memo (TXT)",
             data=memo_text.encode("utf-8"),
             file_name=f"AuditMemo_{cfg['audit_period']}.txt",
             mime="text/plain",
@@ -1485,7 +1483,7 @@ def tab_report(
         if scored_df is not None:
             flagged_csv = scored_df[scored_df["risk_score"] >= 40].to_csv(index=False)
             st.download_button(
-                label="📊 Download Flagged JE (CSV)",
+                label="Download Flagged JE (CSV)",
                 data=flagged_csv,
                 file_name=f"Flagged_JE_{cfg['audit_period']}.csv",
                 mime="text/csv",
@@ -1501,9 +1499,9 @@ def main():
     # Header
     st.markdown(
         f'<div class="ey-banner">'
-        f'<h1>🔍 AuditAI Analytics Platform</h1>'
-        f'<p>Enterprise Data Analytics for External Audit &nbsp;|&nbsp; '
-        f'ISA 240 · ISA 315 · ISA 500 · PCAOB AS 2401 &nbsp;|&nbsp; '
+        f'<h1>AuditAI Analytics</h1>'
+        f'<p>Audit Data Analytics Platform &nbsp;|&nbsp; '
+        f'ISA 240  ·  ISA 315  ·  ISA 500  ·  PCAOB AS 2401 &nbsp;|&nbsp; '
         f'Client: <strong>{cfg["client_name"]}</strong> &nbsp;|&nbsp; '
         f'Period: <strong>{cfg["audit_period"]}</strong></p>'
         f'</div>',
@@ -1519,7 +1517,7 @@ def main():
             return
 
     # Load data
-    with st.spinner("Loading data…"):
+    with st.spinner("Loading data..."):
         raw_df = load_data(cfg)
 
     if raw_df is None or raw_df.empty:
@@ -1574,13 +1572,14 @@ def main():
         st.sidebar.warning(f"ML detection: {e}")
 
     # Tabs
-    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
-        "📊 Executive Summary",
-        "📐 Benford's Law",
-        "📋 Journal Entry Risk",
-        "🤖 ML Anomaly Detection",
-        "🏢 Vendor Analysis",
-        "📝 Audit Report",
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+        "Executive Summary",
+        "Benford's Law",
+        "Journal Entry Risk",
+        "ML Anomaly Detection",
+        "Vendor Analysis",
+        "Audit Report",
+        "Assistant",
     ])
 
     with tab1:
@@ -1606,6 +1605,95 @@ def main():
 
     with tab6:
         tab_report(df, scored_df, benford_result, ml_scored, cfg)
+
+    with tab7:
+        tab_assistant(cfg)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Tab: Assistant
+# ─────────────────────────────────────────────────────────────────────────────
+def tab_assistant(cfg: dict):
+    st.markdown('<div class="section-header">Audit Concepts Assistant</div>',
+                unsafe_allow_html=True)
+    st.markdown(
+        "Ask any question about audit methodology, ISA standards, statistical tests, "
+        "machine learning concepts, or how to interpret the platform results. "
+        "The assistant responds in the language of your question."
+    )
+
+    api_key = cfg.get("ai_api_key", "").strip()
+    if not api_key:
+        st.warning(
+            "Enter your API key in the sidebar (AI Report Generation section) "
+            "to activate the assistant."
+        )
+        st.markdown("**Sample questions you can ask once connected:**")
+        for q in STARTER_QUESTIONS:
+            st.markdown(f"- {q}")
+        return
+
+    # Initialise chat history
+    if "chat_history" not in st.session_state:
+        st.session_state["chat_history"] = []
+
+    # Starter question chips
+    if not st.session_state["chat_history"]:
+        st.markdown("**Suggested questions:**")
+        cols = st.columns(2)
+        for i, q in enumerate(STARTER_QUESTIONS[:6]):
+            if cols[i % 2].button(q, key=f"starter_{i}", use_container_width=True):
+                st.session_state["chat_history"].append({"role": "user", "content": q})
+                with st.spinner("Thinking..."):
+                    try:
+                        answer = call_chatbot(
+                            history=[],
+                            user_message=q,
+                            provider=cfg["ai_provider"],
+                            model=cfg["ai_model"],
+                            api_key=api_key,
+                        )
+                        st.session_state["chat_history"].append(
+                            {"role": "assistant", "content": answer}
+                        )
+                    except Exception as e:
+                        st.error(f"Error: {e}")
+                st.rerun()
+
+    # Display history
+    for turn in st.session_state["chat_history"]:
+        with st.chat_message(turn["role"]):
+            st.markdown(turn["content"])
+
+    # Input
+    user_input = st.chat_input("Ask a question about audit concepts or this analysis...")
+    if user_input:
+        st.session_state["chat_history"].append({"role": "user", "content": user_input})
+        with st.chat_message("user"):
+            st.markdown(user_input)
+
+        with st.chat_message("assistant"):
+            with st.spinner("Thinking..."):
+                try:
+                    answer = call_chatbot(
+                        history=st.session_state["chat_history"][:-1],
+                        user_message=user_input,
+                        provider=cfg["ai_provider"],
+                        model=cfg["ai_model"],
+                        api_key=api_key,
+                    )
+                    st.markdown(answer)
+                    st.session_state["chat_history"].append(
+                        {"role": "assistant", "content": answer}
+                    )
+                except Exception as e:
+                    st.error(f"Error: {e}")
+
+    # Clear button
+    if st.session_state["chat_history"]:
+        if st.button("Clear conversation"):
+            st.session_state["chat_history"] = []
+            st.rerun()
 
 
 if __name__ == "__main__":
