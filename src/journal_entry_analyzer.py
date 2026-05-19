@@ -98,14 +98,16 @@ class JournalEntryAnalyzer:
     def _is_unusual_hour(self, hour: int) -> bool:
         return hour >= self.unusual_hour_start or hour < self.unusual_hour_end
 
-    def _is_public_holiday(self, dt: pd.Timestamp) -> bool:
+    def _build_holiday_set(self, years: set) -> set:
         if not _HOL_AVAILABLE:
-            return False
-        try:
-            country_hols = _hol.country_holidays(self.country, years=dt.year)
-            return dt.date() in country_hols
-        except Exception:
-            return False
+            return set()
+        result: set = set()
+        for yr in years:
+            try:
+                result |= set(_hol.country_holidays(self.country, years=yr).keys())
+            except Exception:
+                pass
+        return result
 
     def _get_unusual_users(self, df: pd.DataFrame) -> List:
         if "user_id" not in df.columns:
@@ -161,6 +163,10 @@ class JournalEntryAnalyzer:
         reversal_flags = self._flag_same_day_reversals(result)
         split_flags = self._flag_split_transactions(result)
 
+        # Pre-compute holiday set once for all years present in the data
+        years_in_data = set(result["posting_date"].dropna().dt.year.astype(int))
+        holiday_set = self._build_holiday_set(years_in_data)
+
         for idx in result.index:
             row = result.loc[idx]
             dt = row["posting_date"]
@@ -185,7 +191,7 @@ class JournalEntryAnalyzer:
             if dt.dayofweek >= 5:
                 result.at[idx, "flag_weekend"] = True
 
-            if self._is_public_holiday(dt):
+            if dt.date() in holiday_set:
                 result.at[idx, "flag_public_holiday"] = True
 
             if reversal_flags.get(idx, False):

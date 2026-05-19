@@ -178,12 +178,13 @@ def run_benford(_df, digit_type, min_amount, alpha):
 
 
 @st.cache_data(show_spinner="Scoring journal entries...")
-def run_je_scoring(_df, materiality, period_end_days, unusual_start, unusual_end):
+def run_je_scoring(_df, materiality, period_end_days, unusual_start, unusual_end, country="US"):
     analyzer = JournalEntryAnalyzer(
         materiality=materiality,
         period_end_days=period_end_days,
         unusual_hour_start=unusual_start,
         unusual_hour_end=unusual_end,
+        country=country,
     )
     return analyzer.score_entries(_df)
 
@@ -251,10 +252,15 @@ def build_sidebar():
         # ── Filters ────────────────────────────────────────────────────
         st.markdown("#### Filters")
 
-        # These are populated after data load (use placeholders)
-        filter_entity    = st.multiselect("Entity / company", options=[], placeholder="All entities")
-        filter_acct_type = st.multiselect("Account type",     options=[], placeholder="All types")
-        filter_user      = st.multiselect("Posted by (user)", options=[], placeholder="All users")
+        # Populate options from previously loaded data (available on second+ reruns)
+        _fdf = st.session_state.get("_raw_df")
+        _entity_opts  = sorted(_fdf["entity"].dropna().unique().tolist())      if _fdf is not None and "entity"       in _fdf.columns else []
+        _acct_opts    = sorted(_fdf["account_type"].dropna().unique().tolist()) if _fdf is not None and "account_type" in _fdf.columns else []
+        _user_opts    = sorted(_fdf["user_id"].dropna().unique().tolist())      if _fdf is not None and "user_id"      in _fdf.columns else []
+
+        filter_entity    = st.multiselect("Entity / company", options=_entity_opts, placeholder="All entities")
+        filter_acct_type = st.multiselect("Account type",     options=_acct_opts,  placeholder="All types")
+        filter_user      = st.multiselect("Posted by (user)", options=_user_opts,  placeholder="All users")
         filter_dc        = st.radio("Debit / Credit", ["Both", "Debit only", "Credit only"])
 
         date_range = st.date_input(
@@ -340,6 +346,12 @@ def build_sidebar():
             unusual_start = st.number_input("After (hh)", value=20, min_value=16, max_value=23)
         with col2:
             unusual_end = st.number_input("Before (hh)", value=6, min_value=0, max_value=8)
+        holiday_country = st.text_input(
+            "Public holiday country (ISO code)",
+            value="US",
+            max_chars=3,
+            help="ISO 3166-1 alpha-2 code. Examples: US, FR, GB, DE, CA, AU, BE, CH",
+        ).strip().upper() or "US"
 
         st.divider()
 
@@ -420,6 +432,7 @@ def build_sidebar():
         "n_clusters":       n_clusters,
         "unusual_start":    int(unusual_start),
         "unusual_end":      int(unusual_end),
+        "holiday_country":  holiday_country,
         "dup_window":       dup_window,
         "fuzzy_threshold":  fuzzy_threshold,
         "ai_provider":      ai_provider,
@@ -1527,14 +1540,8 @@ def main():
             st.warning("No data loaded. Please use the sample dataset or upload a file.")
         return
 
-    # Show available filter values in sidebar expander
-    with st.sidebar.expander("Available filter values"):
-        if "entity" in raw_df.columns:
-            st.write("**Entities:**", ", ".join(sorted(raw_df["entity"].dropna().unique())))
-        if "account_type" in raw_df.columns:
-            st.write("**Account types:**", ", ".join(sorted(raw_df["account_type"].dropna().unique())))
-        if "user_id" in raw_df.columns:
-            st.write("**Users:**", ", ".join(sorted(raw_df["user_id"].dropna().unique())))
+    # Store for filter option population on next rerun
+    st.session_state["_raw_df"] = raw_df
 
     # Apply filters
     df = apply_filters(raw_df, cfg)
@@ -1560,7 +1567,7 @@ def main():
     try:
         scored_df = run_je_scoring(
             df, cfg["materiality"], cfg["period_end_days"],
-            cfg["unusual_start"], cfg["unusual_end"]
+            cfg["unusual_start"], cfg["unusual_end"], cfg["holiday_country"]
         )
     except Exception as e:
         st.sidebar.warning(f"JE scoring: {e}")
