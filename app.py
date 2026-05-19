@@ -370,14 +370,27 @@ def build_sidebar():
             "Model",
             options=PROVIDERS[ai_provider]["models"],
         )
-        ai_api_key = st.text_input(
-            "API Key",
-            type="password",
-            placeholder=PROVIDERS[ai_provider]["key_hint"],
-            help=f"Get your key: {PROVIDERS[ai_provider]['docs']}",
-        )
-        st.caption(f"[Get {PROVIDERS[ai_provider]['label'].split('(')[0].strip()} API key]"
-                   f"({PROVIDERS[ai_provider]['docs']})")
+        # Read from Streamlit secrets if pre-configured, else sidebar input
+        _secret_key = ""
+        try:
+            _secret_key = st.secrets.get("api_keys", {}).get(ai_provider, "")
+        except Exception:
+            pass
+
+        if _secret_key:
+            st.success("API key loaded from Streamlit secrets.")
+            ai_api_key = _secret_key
+        else:
+            ai_api_key = st.text_input(
+                "API Key",
+                type="password",
+                placeholder=PROVIDERS[ai_provider]["key_hint"],
+                help=f"Get your key: {PROVIDERS[ai_provider]['docs']}",
+            )
+            st.caption(
+                f"[Get {PROVIDERS[ai_provider]['label'].split('(')[0].strip()} API key]"
+                f"({PROVIDERS[ai_provider]['docs']})"
+            )
 
         st.divider()
         st.caption("AuditAI Analytics Platform v2.0")
